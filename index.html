@@ -1304,7 +1304,10 @@
       const lbPointers = new Map();
       let lbPan = null;
       let lbPinch = null;
+      let lbSwipe = null;
+      let lbMultiTouch = false;
       let lbSuppressClick = false;
+      const SWIPE_MIN_X = 56;
       let blockBackdropClose = false;
       const LB_MAX_SCALE = 4;
 
@@ -1325,6 +1328,8 @@
         lbTy = 0;
         lbPan = null;
         lbPinch = null;
+        lbSwipe = null;
+        lbMultiTouch = false;
         lbPointers.clear();
         lbPrint.style.transform = "";
       }
@@ -1419,13 +1424,29 @@
             layoutH: layout.h
           };
           lbPan = null;
+          lbSwipe = null;
+          lbMultiTouch = true;
           return;
         }
 
-        if (lightboxControlTarget(e.target) || lbScale <= 1) {
+        if (lightboxControlTarget(e.target)) {
           lbPan = null;
+          lbSwipe = null;
           return;
         }
+
+        // At 1x a single finger can swipe between photos. Zoomed photos pan instead.
+        if (lbScale <= 1.001) {
+          lbPan = null;
+          lbPinch = null;
+          lbSwipe = {
+            id: e.pointerId,
+            startX: e.clientX,
+            startY: e.clientY
+          };
+          return;
+        }
+        lbSwipe = null;
         const panLayout = lightboxLayout();
         lbPan = {
           id: e.pointerId,
@@ -1443,6 +1464,11 @@
       lightbox.addEventListener("pointermove", (e) => {
         if (!lbPointers.has(e.pointerId)) return;
         lbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        if (lbSwipe && e.pointerId === lbSwipe.id && lbPointers.size === 1) {
+          lbSwipe.x = e.clientX;
+          lbSwipe.y = e.clientY;
+        }
 
         if (lbPointers.size >= 2 && lbPinch) {
           const dist = Math.max(pointerDistance(lbPointers), 1);
@@ -1469,8 +1495,12 @@
 
       function endLightboxPointer(e) {
         if (!lbPointers.has(e.pointerId)) return;
+        const swipe = lbSwipe && lbSwipe.id === e.pointerId ? lbSwipe : null;
+        const dx = swipe ? e.clientX - swipe.startX : 0;
+        const dy = swipe ? e.clientY - swipe.startY : 0;
+        const swipeTravel = swipe ? Math.hypot(dx, dy) : 0;
         lbPointers.delete(e.pointerId);
-        const moved = (lbPinch !== null) || (lbPan && lbPan.maxTravel >= 5);
+        const moved = (lbPinch !== null) || (lbPan && lbPan.maxTravel >= 5) || swipeTravel >= 8;
         if (moved) {
           lbSuppressClick = true;
           setTimeout(() => { lbSuppressClick = false; }, 400);
@@ -1478,10 +1508,24 @@
         if (lbPointers.size >= 1) {
           lbPan = null;
           lbPinch = null;
+          lbSwipe = null;
+          lbMultiTouch = true;
           return;
         }
+        const horizontalSwipe = e.type !== "pointercancel"
+          && swipe
+          && !lbMultiTouch
+          && lbPinch === null
+          && lbScale <= 1.001
+          && Math.abs(dx) >= SWIPE_MIN_X
+          && Math.abs(dx) > Math.abs(dy) * 1.2;
         lbPan = null;
         lbPinch = null;
+        lbSwipe = null;
+        lbMultiTouch = false;
+        if (horizontalSwipe) {
+          stepLightbox(dx < 0 ? 1 : -1);
+        }
       }
 
       lightbox.addEventListener("pointerup", endLightboxPointer);
@@ -1501,7 +1545,7 @@
           if (blockBackdropClose) return;
           closeLightbox();
         }
-      });
+      }, true);
 
       window.addEventListener("keydown", (e) => {
         if (!lightbox.classList.contains("open")) return;
