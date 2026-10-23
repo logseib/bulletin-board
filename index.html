@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Photo Bulletin Board</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background-color: #bc8753;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+
+    /* Full-viewport pan/zoom stage with three background options */
+    #viewport {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      cursor: grab;
+      transition: background-color 0.2s ease;
+    }
+
+    /* Theme 1: Endless brown corkboard (default) */
+    #viewport[data-bg="cork"] {
+      background-color: #bf8a56;
+      background-image:
+        radial-gradient(ellipse at 50% 50%, rgba(255, 232, 205, 0.10) 0%, rgba(58, 32, 12, 0.18) 100%);
+    }
+
+    /* Theme 2: Light gray (10% darker than original #f2f2f0 -> #dadad8) */
+    #viewport[data-bg="light"] {
+      background-color: #dadad8;
+      background-image:
+        radial-gradient(ellipse at 50% 50%, rgba(255, 255, 255, 0.22) 0%, rgba(0, 0, 0, 0.04) 100%);
+    }
+
+    /* Theme 3: Very dark gray (almost black) */
+    #viewport[data-bg="dark"] {
+      background-color: #212123;
+      background-image:
+        radial-gradient(ellipse at 50% 50%, rgba(255, 255, 255, 0.015) 0%, rgba(0, 0, 0, 0.35) 100%);
+    }
+
+    #viewport.is-panning {
+      cursor: grabbing;
+    }
+
+    /*
+     * 4-row horizontal column-flow grid (grid-auto-flow: column)
+     * with width/height: max-content so it never reflows on window resize
+     * and expands horizontally to the right as new photos are added.
+     * Gap increased by ~25% total (61px 70px).
+     */
+    #board {
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: inline-grid;
+      grid-template-rows: repeat(4, auto);
+      grid-auto-flow: column;
+      grid-auto-columns: auto;
+      align-items: center;
+      justify-items: center;
+      gap: 61px 77px;
+      padding: 75px 86px;
+      width: max-content;
+      height: max-content;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    /*
+     * Background dot/grain plane locked inside #board's coordinate system:
+     * Fixed 22px board-space spacing (which equals the exact 16px screen spacing in
+     * the reference screenshot at Fit scale), scaling 1:1 proportionally with the photos
+     * during zoom without browser tile-rounding jumps.
+     */
+    #board::before {
+      content: "";
+      position: absolute;
+      inset: -24000px;
+      pointer-events: none;
+      z-index: -1;
+    }
+
+    /* Keep only the single lightest, biggest dot layer on the brown corkboard, with matching 22px board spacing and ~5% softer contrast */
+    #viewport[data-bg="cork"] #board::before {
+      background-image:
+        radial-gradient(circle, rgba(226, 192, 150, 0.16) 1.5px, transparent 2px);
+      background-size: 22px 22px;
+      background-position: 0 0;
+    }
+
+    /* Subtle dots on the light gray background (~5% reduced contrast), locked to 22px board spacing */
+    #viewport[data-bg="light"] #board::before {
+      background-image:
+        radial-gradient(circle, rgba(0, 0, 0, 0.065) 1.35px, transparent 1.85px);
+      background-size: 22px 22px;
+      background-position: 0 0;
+    }
+
+    /* Subtle dots on the dark gray background (~5% darker / reduced contrast), locked to 22px board spacing */
+    #viewport[data-bg="dark"] #board::before {
+      background-image:
+        radial-gradient(circle, rgba(255, 255, 255, 0.055) 1.35px, transparent 1.85px);
+      background-size: 22px 22px;
+      background-position: 0 0;
+    }
+
+    /*
+     * Photo prints with 60% white borders (7px), subtle drop shadows (no pins),
+     * natural aspect ratio (horizontal or vertical), and per-reload random position
+     * offset (--tx, --ty) + rotation angle (--rot).
+     */
+    .photo-card {
+      position: relative;
+      width: 340px;
+      background: #fdfbf7;
+      padding: 7px;
+      border-radius: 3px;
+      box-shadow:
+        0 7px 18px rgba(24, 12, 4, 0.34),
+        0 2px 5px rgba(24, 12, 4, 0.22);
+      transform: translate3d(var(--tx, 0px), var(--ty, 0px), 0) rotate(var(--rot, 0deg));
+      transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease;
+      cursor: pointer;
+      -webkit-user-drag: none;
+    }
+
+    #viewport[data-bg="light"] .photo-card {
+      box-shadow:
+        0 7px 20px rgba(0, 0, 0, 0.16),
+        0 2px 5px rgba(0, 0, 0, 0.10);
+    }
+
+    #viewport[data-bg="dark"] .photo-card {
+      box-shadow:
+        0 8px 24px rgba(0, 0, 0, 0.65),
+        0 2px 6px rgba(0, 0, 0, 0.45);
+    }
+
+    .photo-card:hover {
+      z-index: 20;
+      transform: translate3d(var(--tx, 0px), calc(var(--ty, 0px) - 3px), 0) rotate(var(--rot, 0deg)) scale(1.035);
+      box-shadow:
+        0 14px 30px rgba(20, 10, 2, 0.45),
+        0 4px 10px rgba(20, 10, 2, 0.28);
+    }
+
+    .photo-frame {
+      width: 100%;
+      overflow: hidden;
+      background: #e6e1da;
+      position: relative;
+    }
+
+    .photo-frame img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      pointer-events: none;
+      -webkit-user-drag: none;
+    }
+
+    /* Small yellow sticky note with handwritten "NEW" for photos added to the board <= 1 week */
+    .new-sticky {
+      position: absolute;
+      top: -10px;
+      right: -10px;
+      width: 48px;
+      height: 44px;
+      background: linear-gradient(165deg, #fff68f 0%, #f6df4b 100%);
+      border: 1px solid rgba(185, 155, 30, 0.28);
+      border-radius: 1.5px;
+      box-shadow:
+        0 4px 9px rgba(20, 12, 4, 0.28),
+        0 1px 2px rgba(20, 12, 4, 0.18);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: "Bradley Hand", "Marker Felt", "Noteworthy", "Segoe Print", "Comic Sans MS", cursive;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      color: #2b2316;
+      transform: rotate(var(--sticky-rot, 6deg));
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    /* Bottom-right control bar (Background + Sort / Shuffle + Zoom) */
+    .board-hud {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      z-index: 50;
+    }
+
+    .board-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: rgba(34, 24, 16, 0.78);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 235, 210, 0.2);
+      border-radius: 999px;
+      padding: 4px 6px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.30);
+    }
+
+    .board-controls button {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: #f7f0e6;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 5px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+      line-height: 1;
+      white-space: nowrap;
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .board-controls .icon-btn {
+      width: 28px;
+      height: 26px;
+      padding: 0;
+      font-size: 16px;
+    }
+
+    .board-controls .icon-btn svg {
+      width: 15px;
+      height: 15px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+
+    .board-controls button:hover {
+      background: rgba(255, 255, 255, 0.16);
+    }
+
+    .board-controls button.active {
+      background: rgba(253, 251, 247, 0.24);
+      color: #ffffff;
+    }
+
+    .board-controls select {
+      appearance: none;
+      -webkit-appearance: none;
+      border: none;
+      background: transparent;
+      color: #f7f0e6;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 5px 22px 5px 10px;
+      border-radius: 999px;
+      cursor: pointer;
+      line-height: 1;
+      outline: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23f7f0e6' d='M1 1l4 4 4-4' stroke='%23f7f0e6' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round' fill-opacity='0'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 8px center;
+    }
+
+    .board-controls select:hover {
+      background-color: rgba(255, 255, 255, 0.14);
+    }
+
+    .board-controls select option {
+      background: #241911;
+      color: #f7f0e6;
+    }
+
+    .control-divider {
+      width: 1px;
+      height: 16px;
+      background: rgba(255, 235, 210, 0.22);
+      margin: 0 2px;
+    }
+
+    /* Temporarily hide the sort dropdown and divider visually while keeping all sort logic intact */
+    #sort-mode,
+    .control-divider {
+      display: none !important;
+    }
+
+    /* Background swatch dots */
+    .bg-swatch {
+      width: 20px;
+      height: 20px;
+      padding: 0 !important;
+      border-radius: 50% !important;
+      border: 1.5px solid rgba(255, 255, 255, 0.35) !important;
+      position: relative;
+      margin: 0 2px;
+    }
+
+    .bg-swatch.active {
+      border-color: #ffffff !important;
+      box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+    }
+
+    .bg-swatch[data-bg-choice="cork"] {
+      background: #bf8a56 !important;
+    }
+
+    .bg-swatch[data-bg-choice="light"] {
+      background: #dadad8 !important;
+    }
+
+    .bg-swatch[data-bg-choice="dark"] {
+      background: #212123 !important;
+    }
+
+    .board-controls button[data-tooltip]::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%) translateY(3px);
+      background: rgba(24, 16, 10, 0.92);
+      color: #f7f0e6;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 4px 8px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 235, 210, 0.18);
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.14s ease, transform 0.14s ease;
+      z-index: 80;
+    }
+
+    .board-controls button[data-tooltip]:hover::after {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* Click-to-enlarge Lightbox Overlay */
+    #lightbox {
+      position: fixed;
+      inset: 0;
+      background: rgba(18, 12, 7, 0.86);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.22s ease;
+    }
+
+    #lightbox.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .lightbox-inner {
+      position: relative;
+      max-width: 90vw;
+      max-height: 88vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transform: scale(0.95);
+      transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    #lightbox.open .lightbox-inner {
+      transform: scale(1);
+    }
+
+    .lightbox-print {
+      background: #fdfbf7;
+      padding: 10px;
+      border-radius: 4px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.75);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    #lightbox-img {
+      max-width: calc(90vw - 20px);
+      max-height: calc(82vh - 30px);
+      width: auto;
+      height: auto;
+      display: block;
+      object-fit: contain;
+      -webkit-user-drag: none;
+    }
+
+    #lightbox-caption {
+      margin-top: 12px;
+      color: #f2eadf;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+      font-weight: 500;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    }
+
+    .lb-btn {
+      position: fixed;
+      appearance: none;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(30, 22, 15, 0.72);
+      color: #f7f2eb;
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      font-size: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.15s ease;
+      z-index: 210;
+    }
+
+    .lb-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+      transform: scale(1.06);
+    }
+
+    #lb-close {
+      top: 20px;
+      right: 22px;
+      font-size: 24px;
+    }
+
+    #lb-prev {
+      left: 22px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    #lb-prev:hover {
+      transform: translateY(-50%) scale(1.06);
+    }
+
+    #lb-next {
+      right: 22px;
+      top: 50%;
+      transform: translateY(-50%);
+    }
+
+    #lb-next:hover {
+      transform: translateY(-50%) scale(1.06);
+    }
+  </style>
+</head>
+<body>
+
+  <div id="viewport" data-bg="cork">
+    <div id="board"></div>
+  </div>
+
+  <div class="board-hud">
+    <div class="board-controls" aria-label="Background theme options">
+      <button type="button" class="bg-swatch active" data-bg-choice="cork" data-tooltip="cork" aria-label="cork"></button>
+      <button type="button" class="bg-swatch" data-bg-choice="light" data-tooltip="light" aria-label="light"></button>
+      <button type="button" class="bg-swatch" data-bg-choice="dark" data-tooltip="dark" aria-label="dark"></button>
+    </div>
+
+    <div class="board-controls" aria-label="Photo organization controls">
+      <select id="sort-mode" hidden aria-hidden="true">
+        <option value="added-desc">Date Added: Newest</option>
+        <option value="added-asc">Date Added: Oldest</option>
+        <option value="taken-desc">Date Taken: Newest</option>
+        <option value="taken-asc">Date Taken: Oldest</option>
+        <option value="shuffle">Shuffle Order</option>
+      </select>
+      <div class="control-divider" hidden aria-hidden="true"></div>
+      <button type="button" id="shuffle-btn" class="icon-btn" data-tooltip="Shuffle" aria-label="Shuffle" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <polyline points="16 3 21 3 21 8"></polyline>
+          <line x1="4" y1="20" x2="21" y2="3"></line>
+          <polyline points="21 16 21 21 16 21"></polyline>
+          <line x1="15" y1="15" x2="21" y2="21"></line>
+          <line x1="4" y1="4" x2="9" y2="9"></line>
+        </svg>
+      </button>
+    </div>
+
+    <div class="board-controls" aria-label="Board zoom controls">
+      <button type="button" id="zoom-out" class="icon-btn" aria-label="Zoom out">−</button>
+      <button type="button" id="zoom-fit" class="icon-btn" data-tooltip="Fit" aria-label="Fit">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 9V5a1 1 0 0 1 1-1h4"></path>
+          <path d="M20 9V5a1 1 0 0 0-1-1h-4"></path>
+          <path d="M4 15v4a1 1 0 0 0 1 1h4"></path>
+          <path d="M20 15v4a1 1 0 0 1-1 1h-4"></path>
+        </svg>
+      </button>
+      <button type="button" id="zoom-in" class="icon-btn" aria-label="Zoom in">+</button>
+    </div>
+  </div>
+
+  <div id="lightbox" role="dialog" aria-modal="true" aria-label="Enlarged photo view">
+    <button type="button" class="lb-btn" id="lb-close" aria-label="Close">×</button>
+    <button type="button" class="lb-btn" id="lb-prev" aria-label="Previous photo">‹</button>
+    <div class="lightbox-inner">
+      <div class="lightbox-print">
+        <img id="lightbox-img" src="" alt="" draggable="false" />
+      </div>
+      <div id="lightbox-caption"></div>
+    </div>
+    <button type="button" class="lb-btn" id="lb-next" aria-label="Next photo">›</button>
+  </div>
+
+  <!-- Auto-generated manifest from images/ folder -->
+  <script src="images/manifest.js"></script>
+  <script>
+    (function () {
+      /*
+       * Photo list is loaded dynamically by scanning the images/ folder
+       * (via images/manifest.js, Jekyll static_files manifest, HTTP directory listing,
+       * and GitHub Contents API when hosted on GitHub Pages) with zero hardcoded filenames here.
+       */
+      let basePhotos = Array.isArray(window.__BULLETIN_MANIFEST__)
+        ? window.__BULLETIN_MANIFEST__.slice()
+        : [];
+
+      let displayedPhotos = [];
+
+      // Hard rule: never exceed 4 rows; fill top-to-bottom (rows 1..4), then start a new column to the right
+      const MAX_ROWS = 4;
+
+      // Fresh random tilt (-3.4° to +3.4°) AND random X/Y position offset (-12px to +12px, -10px to +10px) per reload
+      function randomJitter() {
+        const rot = ((Math.random() * 6.8) - 3.4).toFixed(2);
+        const tx = ((Math.random() * 24) - 12).toFixed(1);
+        const ty = ((Math.random() * 20) - 10).toFixed(1);
+        return { rot, tx, ty };
+      }
+
+      /*
+       * Size each photo card to respect its natural aspect ratio:
+       * - Horizontal photos (width >= height): 326px inner width (340px card width), natural height.
+       * - Vertical/portrait photos (height > width): 326px inner height (340px card height), natural width.
+       */
+      function applyCardDimensions(card, frame, w, h) {
+        const nw = Number(w) || 3000;
+        const nh = Number(h) || 2000;
+        const maxInner = 326; // 340px print long edge minus 14px (7px white border on each side)
+        let innerW, innerH;
+        if (nw >= nh) {
+          innerW = maxInner;
+          innerH = Math.round(maxInner * (nh / nw));
+        } else {
+          innerH = maxInner;
+          innerW = Math.round(maxInner * (nw / nh));
+        }
+        card.style.width = (innerW + 14) + "px";
+        frame.style.width = innerW + "px";
+        frame.style.height = innerH + "px";
+        frame.style.aspectRatio = `${nw} / ${nh}`;
+        card.dataset.orientation = nh > nw ? "vertical" : "horizontal";
+      }
+
+      /*
+       * Zoom-out limit increased by another 25% (0.306 / 1.25 ≈ 0.245x)
+       * so users can zoom out 25% further than before.
+       */
+      function getMinScale() {
+        return 0.245;
+      }
+      const MAX_SCALE = 3.2;
+
+      const viewport = document.getElementById("viewport");
+      const board = document.getElementById("board");
+      const sortSelect = document.getElementById("sort-mode");
+      const shuffleBtn = document.getElementById("shuffle-btn");
+      const bgSwatches = document.querySelectorAll(".bg-swatch");
+
+      // Background switcher (Corkboard, Light Gray #dadad8, Very Dark Gray Almost Black)
+      function setBackgroundTheme(theme) {
+        const valid = ["cork", "light", "dark"].includes(theme) ? theme : "cork";
+        viewport.setAttribute("data-bg", valid);
+        document.body.style.backgroundColor =
+          valid === "light" ? "#dadad8" : valid === "dark" ? "#212123" : "#bc8753";
+        bgSwatches.forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.bgChoice === valid);
+        });
+        try {
+          localStorage.setItem("bulletin_bg_theme", valid);
+        } catch (_) {}
+      }
+
+      try {
+        const savedBg = localStorage.getItem("bulletin_bg_theme");
+        if (savedBg) setBackgroundTheme(savedBg);
+      } catch (_) {}
+
+      bgSwatches.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          setBackgroundTheme(btn.dataset.bgChoice);
+        });
+      });
+
+      function naturalCompare(a, b) {
+        return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+      }
+
+      function getOrderedPhotos(mode) {
+        const list = basePhotos.slice();
+        if (mode === "added-asc") {
+          list.sort((a, b) => a.added.localeCompare(b.added) || naturalCompare(a.name || a.file, b.name || b.file));
+        } else if (mode === "added-desc") {
+          list.sort((a, b) => b.added.localeCompare(a.added) || naturalCompare(b.name || b.file, a.name || a.file));
+        } else if (mode === "taken-asc") {
+          list.sort((a, b) => a.taken.localeCompare(b.taken) || naturalCompare(a.name || a.file, b.name || b.file));
+        } else if (mode === "taken-desc") {
+          list.sort((a, b) => b.taken.localeCompare(a.taken) || naturalCompare(b.name || b.file, a.name || a.file));
+        } else if (mode === "shuffle") {
+          for (let i = list.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            const tmp = list[i];
+            list[i] = list[j];
+            list[j] = tmp;
+          }
+        }
+        return list;
+      }
+
+      function renderBoard(mode) {
+        displayedPhotos = getOrderedPhotos(mode);
+        board.innerHTML = "";
+        displayedPhotos.forEach((p, idx) => {
+          const { rot, tx, ty } = randomJitter();
+          const card = document.createElement("div");
+          card.className = "photo-card";
+          card.dataset.index = String(idx);
+          // Hard 4-row cap: populate down each 4-row column, then start the next column to the right
+          card.style.gridRow = String((idx % MAX_ROWS) + 1);
+          card.style.gridColumn = String(Math.floor(idx / MAX_ROWS) + 1);
+          card.style.setProperty("--rot", rot + "deg");
+          card.style.setProperty("--tx", tx + "px");
+          card.style.setProperty("--ty", ty + "px");
+
+          const frame = document.createElement("div");
+          frame.className = "photo-frame";
+
+          // Set initial frame dimensions from manifest width/height (defaulting to 3:2 until naturalWidth loads)
+          applyCardDimensions(card, frame, p.width || 3000, p.height || 2000);
+
+          const img = document.createElement("img");
+          img.src = p.file;
+          img.alt = p.title;
+          img.draggable = false;
+
+          // Ensure any newly discovered photo without precomputed dimensions adopts its true aspect ratio on load
+          img.addEventListener("load", () => {
+            if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+              const prevW = p.width || 3000;
+              const prevH = p.height || 2000;
+              p.width = img.naturalWidth;
+              p.height = img.naturalHeight;
+              applyCardDimensions(card, frame, img.naturalWidth, img.naturalHeight);
+              if (prevW !== img.naturalWidth || prevH !== img.naturalHeight) {
+                applyTransform();
+              }
+            }
+          });
+
+          frame.appendChild(img);
+          card.appendChild(frame);
+
+          /*
+           * Yellow "NEW" sticky note rule:
+           * Based strictly on when the image was added to the board on disk (p.added: file creation or
+           * modification date on disk, NOT EXIF date taken). Appears for 1 week (7 days) after being added,
+           * then disappears automatically.
+           */
+          const rawAdded = String(p.added || "").split("#")[0];
+          const addedMs = Date.parse(rawAdded);
+          const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+          const ageMs = Date.now() - addedMs;
+          if (!Number.isNaN(addedMs) && ageMs <= oneWeekMs && ageMs >= -oneWeekMs) {
+            const sticky = document.createElement("div");
+            sticky.className = "new-sticky";
+            sticky.textContent = "NEW";
+            const stickyRot = ((Math.random() * 10) + 3).toFixed(1);
+            sticky.style.setProperty("--sticky-rot", stickyRot + "deg");
+            card.appendChild(sticky);
+          }
+
+          board.appendChild(card);
+        });
+        const isShuffled = mode === "shuffle";
+        shuffleBtn.classList.toggle("active", isShuffled);
+        shuffleBtn.setAttribute("aria-pressed", isShuffled ? "true" : "false");
+      }
+
+      // Default timeline order: oldest on the left -> most recent on the right end ("added-asc")
+      const NON_SHUFFLE_MODES = ["added-desc", "added-asc", "taken-desc", "taken-asc"];
+      let lastSortMode = "added-asc";
+      let currentMode = "added-asc";
+      try {
+        const savedLast = localStorage.getItem("bulletin_last_sort_mode_v2");
+        if (savedLast && NON_SHUFFLE_MODES.includes(savedLast)) {
+          lastSortMode = savedLast;
+        }
+        const saved = localStorage.getItem("bulletin_sort_mode_v2");
+        if (saved && [...NON_SHUFFLE_MODES, "shuffle"].includes(saved)) {
+          currentMode = saved;
+          if (NON_SHUFFLE_MODES.includes(saved)) {
+            lastSortMode = saved;
+          }
+        }
+      } catch (_) {}
+
+      sortSelect.value = currentMode;
+      renderBoard(currentMode);
+
+      sortSelect.addEventListener("change", () => {
+        const nextMode = sortSelect.value;
+        if (NON_SHUFFLE_MODES.includes(nextMode)) {
+          lastSortMode = nextMode;
+          try {
+            localStorage.setItem("bulletin_last_sort_mode_v2", lastSortMode);
+          } catch (_) {}
+        } else if (currentMode !== "shuffle" && NON_SHUFFLE_MODES.includes(currentMode)) {
+          lastSortMode = currentMode;
+          try {
+            localStorage.setItem("bulletin_last_sort_mode_v2", lastSortMode);
+          } catch (_) {}
+        }
+        currentMode = nextMode;
+        try {
+          localStorage.setItem("bulletin_sort_mode_v2", currentMode);
+        } catch (_) {}
+        renderBoard(currentMode);
+      });
+
+      /*
+       * Shuffle button acts as a toggle:
+       * - Clicking once activates shuffle mode (randomizing photo order).
+       * - Clicking again deactivates shuffle mode and restores the previous sort mode
+       *   (date added or date taken, newest or oldest).
+       */
+      shuffleBtn.addEventListener("click", () => {
+        if (currentMode === "shuffle") {
+          currentMode = NON_SHUFFLE_MODES.includes(lastSortMode) ? lastSortMode : "added-asc";
+          sortSelect.value = currentMode;
+          try {
+            localStorage.setItem("bulletin_sort_mode_v2", currentMode);
+          } catch (_) {}
+          renderBoard(currentMode);
+        } else {
+          if (NON_SHUFFLE_MODES.includes(currentMode)) {
+            lastSortMode = currentMode;
+            try {
+              localStorage.setItem("bulletin_last_sort_mode_v2", lastSortMode);
+            } catch (_) {}
+          }
+          currentMode = "shuffle";
+          sortSelect.value = "shuffle";
+          try {
+            localStorage.setItem("bulletin_sort_mode_v2", "shuffle");
+          } catch (_) {}
+          renderBoard("shuffle");
+        }
+      });
+
+      // Pan & Zoom state
+      let scale = 1;
+      let panX = 0;
+      let panY = 0;
+
+      /*
+       * Generous soft pan boundaries:
+       * Allow panning far in every direction so most of the board can be pushed off-screen,
+       * while always keeping at least one full row (top or bottom) and at least one full
+       * column (leftmost or rightmost) inside the viewport so photos are never lost.
+       */
+      function clampPan() {
+        const vw = window.innerWidth || 1440;
+        const vh = window.innerHeight || 900;
+        const boardW = board.offsetWidth || 1304;
+        const boardH = board.offsetHeight || 1226;
+
+        // Board local distance to include 1 full column (78px pad + 340px card) and 1 full row (68px pad + 232px card)
+        const oneColLocal = 424;
+        const oneRowLocal = 306;
+        const edgeMargin = 24;
+
+        // Dragging left (panX decreases): keep the rightmost column inside the left edge of the viewport
+        const minPanX = edgeMargin - (boardW - oneColLocal) * scale;
+        // Dragging right (panX increases): keep the leftmost column inside the right edge of the viewport
+        const maxPanX = vw - edgeMargin - oneColLocal * scale;
+
+        // Dragging up (panY decreases): keep the bottom row inside the top edge of the viewport
+        const minPanY = edgeMargin - (boardH - oneRowLocal) * scale;
+        // Dragging down (panY increases): keep the top row inside the bottom edge of the viewport
+        const maxPanY = vh - edgeMargin - oneRowLocal * scale;
+
+        const lowX = Math.min(minPanX, maxPanX);
+        const highX = Math.max(minPanX, maxPanX);
+        const lowY = Math.min(minPanY, maxPanY);
+        const highY = Math.max(minPanY, maxPanY);
+
+        panX = Math.min(Math.max(panX, lowX), highX);
+        panY = Math.min(Math.max(panY, lowY), highY);
+      }
+
+      function applyTransform() {
+        clampPan();
+        board.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${scale})`;
+      }
+
+      /*
+       * Fit based on the 4-row vertical height and jump all the way to the right end
+       * of the board so the most recent photos are immediately in view on load/refresh
+       * and whenever "Fit" is clicked.
+       */
+      function fitBoardToViewport() {
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const boardW = board.offsetWidth || 1304;
+        const boardH = board.offsetHeight || 1226;
+        const minScale = getMinScale();
+        const paddingY = 36;
+        const targetScale = (vh - paddingY * 2) / boardH;
+        scale = Math.min(Math.max(targetScale, minScale), MAX_SCALE);
+        const rightMargin = Math.max(36, vw * 0.04);
+        panX = vw - rightMargin - boardW * scale;
+        panY = (vh - boardH * scale) / 2;
+        applyTransform();
+      }
+
+      // Fit initially once layout is ready
+      fitBoardToViewport();
+
+      /*
+       * Automatic images/ folder scanner:
+       * Checks cache-busted images/manifest.js, GitHub Pages Jekyll manifest,
+       * HTTP directory listing (images/), and GitHub Contents API (on *.github.io)
+       * so any JPEG dragged into images/ appears automatically with zero code edits.
+       */
+      function toLocalIso(d) {
+        const pad = (n) => String(n).padStart(2, "0");
+        return (
+          d.getFullYear() + "-" +
+          pad(d.getMonth() + 1) + "-" +
+          pad(d.getDate()) + "T" +
+          pad(d.getHours()) + ":" +
+          pad(d.getMinutes()) + ":" +
+          pad(d.getSeconds())
+        );
+      }
+
+      function formatAutoTitle(filename, isoStr) {
+        const stem = filename.replace(/\.jpe?g$/i, "").replace(/[_-]+/g, " ").trim();
+        const label = /^\d+$/.test(stem) ? "Photo " + stem : stem;
+        const d = new Date(isoStr);
+        if (!Number.isNaN(d.getTime())) {
+          return `${label} · ${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+        }
+        return label;
+      }
+
+      function reloadManifestScript() {
+        return new Promise((resolve) => {
+          const s = document.createElement("script");
+          s.src = "images/manifest.js?v=" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+          s.onload = () => {
+            s.remove();
+            resolve(Array.isArray(window.__BULLETIN_MANIFEST__) ? window.__BULLETIN_MANIFEST__.slice() : []);
+          };
+          s.onerror = () => {
+            s.remove();
+            resolve(Array.isArray(window.__BULLETIN_MANIFEST__) ? window.__BULLETIN_MANIFEST__.slice() : []);
+          };
+          document.head.appendChild(s);
+        });
+      }
+
+      async function fetchDirectoryListingJpegs() {
+        if (window.location.protocol === "file:") return null;
+        try {
+          const res = await fetch("images/?v=" + Date.now(), { cache: "no-store" });
+          if (!res.ok) return null;
+          const ct = (res.headers.get("content-type") || "").toLowerCase();
+          if (!ct.includes("text/html")) return null;
+          const html = await res.text();
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          const anchors = Array.from(doc.querySelectorAll("a[href]"));
+          const names = [];
+          for (const a of anchors) {
+            const rawHref = a.getAttribute("href") || "";
+            if (!rawHref || rawHref.startsWith("?") || rawHref.startsWith("/") || rawHref.includes("..")) continue;
+            const clean = decodeURIComponent(rawHref.split("?")[0].split("#")[0]).replace(/^.*\/+/, "");
+            if (clean && !clean.startsWith(".") && /\.jpe?g$/i.test(clean)) {
+              if (!names.includes(clean)) names.push(clean);
+            }
+          }
+          return names.length > 0 ? names : null;
+        } catch (_) {
+          return null;
+        }
+      }
+
+      async function fetchJekyllManifestJpegs() {
+        if (window.location.protocol === "file:") return null;
+        try {
+          const res = await fetch("images/jekyll-files.json?v=" + Date.now(), { cache: "no-store" });
+          if (!res.ok) return null;
+          const text = (await res.text()).trim();
+          if (!text.startsWith("[")) return null;
+          const data = JSON.parse(text);
+          if (!Array.isArray(data) || data.length === 0) return null;
+          return data;
+        } catch (_) {
+          return null;
+        }
+      }
+
+      async function fetchGitHubPagesApiJpegs() {
+        const host = window.location.hostname;
+        if (!host.endsWith(".github.io")) return null;
+        const owner = host.replace(/\.github\.io$/i, "");
+        const pathParts = window.location.pathname.split("/").filter(Boolean);
+        const repo = pathParts[0] || (owner + ".github.io");
+        try {
+          const apiUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/images`;
+          const res = await fetch(apiUrl, { cache: "no-store" });
+          if (!res.ok) return null;
+          const items = await res.json();
+          if (!Array.isArray(items)) return null;
+          const names = items
+            .filter((it) => it && it.type === "file" && !it.name.startsWith(".") && /\.jpe?g$/i.test(it.name))
+            .map((it) => it.name);
+          return names.length > 0 ? names : null;
+        } catch (_) {
+          return null;
+        }
+      }
+
+      const runtimeMetaCache = new Map();
+
+      async function resolveNewPhotoEntry(name, fallbackModified) {
+        if (runtimeMetaCache.has(name)) {
+          return runtimeMetaCache.get(name);
+        }
+        const encodedFile = "images/" + encodeURIComponent(name);
+        // Added date comes from the file's creation/modification timestamp on disk (or current time when added), NOT EXIF
+        let addedIso = fallbackModified || toLocalIso(new Date());
+        if (window.location.protocol !== "file:") {
+          try {
+            const headRes = await fetch(encodedFile, { method: "HEAD", cache: "no-store" });
+            const lm = headRes.headers.get("last-modified");
+            if (lm) {
+              const parsed = new Date(lm);
+              if (!Number.isNaN(parsed.getTime())) {
+                addedIso = toLocalIso(parsed);
+              }
+            }
+          } catch (_) {}
+        }
+        const entry = {
+          file: encodedFile,
+          name: name,
+          title: formatAutoTitle(name, addedIso),
+          added: addedIso,
+          taken: addedIso
+        };
+        runtimeMetaCache.set(name, entry);
+        return entry;
+      }
+
+      let isScanning = false;
+      async function scanImagesFolder() {
+        if (isScanning) return;
+        isScanning = true;
+        try {
+          const freshManifest = await reloadManifestScript();
+          const byName = new Map();
+          for (const item of freshManifest) {
+            const name = item.name || decodeURIComponent(String(item.file).replace(/^images\//, ""));
+            byName.set(name, item);
+          }
+
+          const [dirNames, jekyllItems, ghNames] = await Promise.all([
+            fetchDirectoryListingJpegs(),
+            fetchJekyllManifestJpegs(),
+            fetchGitHubPagesApiJpegs()
+          ]);
+
+          let authoritativeNames = null;
+          const jekyllModByName = new Map();
+          if (Array.isArray(jekyllItems)) {
+            for (const it of jekyllItems) {
+              if (it && it.name) jekyllModByName.set(it.name, it.modified);
+            }
+          }
+
+          if (Array.isArray(dirNames) && dirNames.length > 0) {
+            authoritativeNames = dirNames;
+          } else if (Array.isArray(ghNames) && ghNames.length > 0) {
+            authoritativeNames = ghNames;
+          } else if (Array.isArray(jekyllItems) && jekyllItems.length > 0) {
+            authoritativeNames = jekyllItems.map((it) => it.name);
+          }
+
+          let merged = [];
+          if (authoritativeNames) {
+            authoritativeNames.sort(naturalCompare);
+            for (const name of authoritativeNames) {
+              if (byName.has(name)) {
+                merged.push(byName.get(name));
+              } else {
+                const entry = await resolveNewPhotoEntry(name, jekyllModByName.get(name));
+                merged.push(entry);
+              }
+            }
+          } else {
+            merged = freshManifest;
+          }
+
+          const prevSig = basePhotos.map((p) => `${p.file}:${p.added}:${p.width || 0}x${p.height || 0}`).join("|");
+          const nextSig = merged.map((p) => `${p.file}:${p.added}:${p.width || 0}x${p.height || 0}`).join("|");
+          if (merged.length > 0 && prevSig !== nextSig) {
+            basePhotos = merged;
+            renderBoard(currentMode);
+            fitBoardToViewport();
+          }
+        } finally {
+          isScanning = false;
+        }
+      }
+
+      scanImagesFolder();
+      window.addEventListener("focus", scanImagesFolder);
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) scanImagesFolder();
+      });
+      setInterval(scanImagesFolder, 2000);
+
+      // Re-clamp on window resize so photos never drift out of bounds
+      window.addEventListener("resize", () => {
+        const minScale = getMinScale();
+        if (scale < minScale) scale = minScale;
+        applyTransform();
+      });
+
+      // Zoom around a specific screen point (cx, cy)
+      function zoomAtPoint(newScale, cx, cy) {
+        const minScale = getMinScale();
+        const clamped = Math.min(Math.max(newScale, minScale), MAX_SCALE);
+        const ratio = clamped / scale;
+        panX = cx - (cx - panX) * ratio;
+        panY = cy - (cy - panY) * ratio;
+        scale = clamped;
+        applyTransform();
+      }
+
+      // Mouse wheel / trackpad zoom
+      viewport.addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+          const zoomFactor = Math.exp(-e.deltaY * 0.0016);
+          zoomAtPoint(scale * zoomFactor, e.clientX, e.clientY);
+        },
+        { passive: false }
+      );
+
+      // Pointer drag to pan + click detection (< 5px travel opens lightbox)
+      let isPointerDown = false;
+      let activePointerId = null;
+      let startX = 0;
+      let startY = 0;
+      let startPanX = 0;
+      let startPanY = 0;
+      let maxTravel = 0;
+      let downCardIndex = null;
+
+      viewport.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        isPointerDown = true;
+        activePointerId = e.pointerId;
+        startX = e.clientX;
+        startY = e.clientY;
+        startPanX = panX;
+        startPanY = panY;
+        maxTravel = 0;
+
+        const card = e.target.closest(".photo-card");
+        downCardIndex = card ? Number(card.dataset.index) : null;
+
+        viewport.setPointerCapture(e.pointerId);
+      });
+
+      viewport.addEventListener("pointermove", (e) => {
+        if (!isPointerDown || e.pointerId !== activePointerId) return;
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        const dist = Math.hypot(dx, dy);
+        if (dist > maxTravel) maxTravel = dist;
+
+        if (maxTravel >= 5) {
+          viewport.classList.add("is-panning");
+        }
+
+        panX = startPanX + dx;
+        panY = startPanY + dy;
+        applyTransform();
+      });
+
+      function endPointer(e) {
+        if (!isPointerDown || e.pointerId !== activePointerId) return;
+        isPointerDown = false;
+        viewport.classList.remove("is-panning");
+        if (viewport.hasPointerCapture(e.pointerId)) {
+          viewport.releasePointerCapture(e.pointerId);
+        }
+
+        // If user clicked a photo without dragging (< 5px), enlarge it
+        if (maxTravel < 5 && downCardIndex !== null) {
+          openLightbox(downCardIndex);
+        }
+        downCardIndex = null;
+      }
+
+      viewport.addEventListener("pointerup", endPointer);
+      viewport.addEventListener("pointercancel", endPointer);
+
+      // Corner zoom controls
+      document.getElementById("zoom-in").addEventListener("click", () => {
+        zoomAtPoint(scale * 1.25, window.innerWidth / 2, window.innerHeight / 2);
+      });
+      document.getElementById("zoom-out").addEventListener("click", () => {
+        zoomAtPoint(scale / 1.25, window.innerWidth / 2, window.innerHeight / 2);
+      });
+      document.getElementById("zoom-fit").addEventListener("click", () => {
+        fitBoardToViewport();
+      });
+
+      // Lightbox logic
+      const lightbox = document.getElementById("lightbox");
+      const lbImg = document.getElementById("lightbox-img");
+      const lbCaption = document.getElementById("lightbox-caption");
+      let currentIndex = -1;
+
+      function openLightbox(index) {
+        currentIndex = (index + displayedPhotos.length) % displayedPhotos.length;
+        const item = displayedPhotos[currentIndex];
+        lbImg.src = item.file;
+        lbImg.alt = item.title;
+        lbCaption.textContent = item.title;
+        lightbox.classList.add("open");
+      }
+
+      function closeLightbox() {
+        lightbox.classList.remove("open");
+        currentIndex = -1;
+      }
+
+      function stepLightbox(delta) {
+        if (currentIndex === -1) return;
+        openLightbox(currentIndex + delta);
+      }
+
+      document.getElementById("lb-close").addEventListener("click", (e) => {
+        e.stopPropagation();
+        closeLightbox();
+      });
+
+      document.getElementById("lb-prev").addEventListener("click", (e) => {
+        e.stopPropagation();
+        stepLightbox(-1);
+      });
+
+      document.getElementById("lb-next").addEventListener("click", (e) => {
+        e.stopPropagation();
+        stepLightbox(1);
+      });
+
+      lightbox.addEventListener("click", (e) => {
+        if (e.target === lightbox) {
+          closeLightbox();
+        }
+      });
+
+      window.addEventListener("keydown", (e) => {
+        if (!lightbox.classList.contains("open")) return;
+        if (e.key === "Escape") closeLightbox();
+        else if (e.key === "ArrowLeft") stepLightbox(-1);
+        else if (e.key === "ArrowRight") stepLightbox(1);
+      });
+    })();
+  </script>
+</body>
+</html>

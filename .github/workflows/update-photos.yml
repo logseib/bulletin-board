@@ -1,0 +1,26 @@
+name: Update Photo Manifest
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'images/**'
+      - 'update-images.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan images folder and update manifest.js
+        run: python3 update-images.py --once
+      - name: Commit updated manifest if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add images/manifest.js images/.photo-meta.json
+          git diff --cached --quiet || git commit -m "Auto-update photo manifest from images/ folder" && git push
