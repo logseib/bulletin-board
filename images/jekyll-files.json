@@ -1,0 +1,18 @@
+---
+layout: null
+---
+[
+{% assign all_files = site.static_files | where_exp: "item", "item.path contains '/images/'" %}
+{% assign first = true %}
+{% for file in all_files %}
+  {% assign ext = file.extname | downcase %}
+  {% if ext == '.jpg' or ext == '.jpeg' %}
+    {% unless first %},{% endunless %}{% assign first = false %}
+    {
+      "name": {{ file.name | jsonify }},
+      "file": {{ file.path | remove_first: '/' | jsonify }},
+      "modified": {{ file.modified_time | date: "%Y-%m-%dT%H:%M:%S" | jsonify }}
+    }
+  {% endif %}
+{% endfor %}
+]
