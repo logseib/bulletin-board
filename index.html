@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Photo Bulletin Board</title>
   <style>
     *, *::before, *::after {
@@ -19,7 +19,7 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       user-select: none;
       -webkit-user-select: none;
-      touch-action: none;
+      touch-action: manipulation;
     }
 
     /* Full-viewport pan/zoom stage with three background options */
@@ -28,6 +28,7 @@
       width: 100vw;
       height: 100vh;
       overflow: hidden;
+      touch-action: none;
       cursor: grab;
       transition: background-color 0.2s ease;
     }
@@ -137,6 +138,7 @@
       transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease;
       cursor: pointer;
       -webkit-user-drag: none;
+      -webkit-touch-callout: none;
     }
 
     #viewport[data-bg="light"] .photo-card {
@@ -173,6 +175,7 @@
       display: block;
       pointer-events: none;
       -webkit-user-drag: none;
+      -webkit-touch-callout: none;
     }
 
     /* Small yellow sticky note with handwritten "NEW" for photos added to the board <= 1 week */
@@ -390,6 +393,7 @@
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.22s ease;
+      touch-action: none;
     }
 
     #lightbox.open {
@@ -430,6 +434,7 @@
       display: block;
       object-fit: contain;
       -webkit-user-drag: none;
+      -webkit-touch-callout: none;
     }
 
     .lightbox-frame {
@@ -1165,65 +1170,115 @@
         { passive: false }
       );
 
-      // Pointer drag to pan + click detection (< 5px travel opens lightbox)
-      let isPointerDown = false;
-      let activePointerId = null;
-      let startX = 0;
-      let startY = 0;
-      let startPanX = 0;
-      let startPanY = 0;
-      let maxTravel = 0;
-      let downCardIndex = null;
+      // One finger pans and taps. Two fingers pinch-zoom the board.
+      // Touch pointers are not captured so the second finger still arrives.
+      const boardPointers = new Map();
+      let panGesture = null;
+      let pinchGesture = null;
+
+      function pointerDistance(points) {
+        const pts = [...points.values()];
+        if (pts.length < 2) return 0;
+        return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      }
+
+      function pointerMidpoint(points) {
+        const pts = [...points.values()];
+        return {
+          x: (pts[0].x + pts[1].x) / 2,
+          y: (pts[0].y + pts[1].y) / 2
+        };
+      }
 
       viewport.addEventListener("pointerdown", (e) => {
-        if (e.button !== 0) return;
-        isPointerDown = true;
-        activePointerId = e.pointerId;
-        startX = e.clientX;
-        startY = e.clientY;
-        startPanX = panX;
-        startPanY = panY;
-        maxTravel = 0;
+        if (lightbox.classList.contains("open")) return;
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        boardPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (e.pointerType === "mouse") {
+          viewport.setPointerCapture(e.pointerId);
+        }
+
+        if (boardPointers.size >= 2) {
+          const mid = pointerMidpoint(boardPointers);
+          pinchGesture = {
+            startDist: Math.max(pointerDistance(boardPointers), 1),
+            startScale: scale,
+            lastMidX: mid.x,
+            lastMidY: mid.y
+          };
+          panGesture = null;
+          viewport.classList.remove("is-panning");
+          return;
+        }
 
         const card = e.target.closest(".photo-card");
-        downCardIndex = card ? Number(card.dataset.index) : null;
-
-        viewport.setPointerCapture(e.pointerId);
+        panGesture = {
+          id: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          startPanX: panX,
+          startPanY: panY,
+          maxTravel: 0,
+          cardIndex: card ? Number(card.dataset.index) : null
+        };
+        pinchGesture = null;
       });
 
       viewport.addEventListener("pointermove", (e) => {
-        if (!isPointerDown || e.pointerId !== activePointerId) return;
-        const dx = e.clientX - startX;
-        const dy = e.clientY - startY;
-        const dist = Math.hypot(dx, dy);
-        if (dist > maxTravel) maxTravel = dist;
+        if (lightbox.classList.contains("open")) return;
+        if (!boardPointers.has(e.pointerId)) return;
+        boardPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-        if (maxTravel >= 5) {
-          viewport.classList.add("is-panning");
+        if (boardPointers.size >= 2 && pinchGesture) {
+          const dist = Math.max(pointerDistance(boardPointers), 1);
+          const mid = pointerMidpoint(boardPointers);
+          panX += mid.x - pinchGesture.lastMidX;
+          panY += mid.y - pinchGesture.lastMidY;
+          pinchGesture.lastMidX = mid.x;
+          pinchGesture.lastMidY = mid.y;
+          zoomAtPoint(pinchGesture.startScale * (dist / pinchGesture.startDist), mid.x, mid.y);
+          return;
         }
 
-        panX = startPanX + dx;
-        panY = startPanY + dy;
+        if (!panGesture || e.pointerId !== panGesture.id) return;
+        const dx = e.clientX - panGesture.startX;
+        const dy = e.clientY - panGesture.startY;
+        panGesture.maxTravel = Math.max(panGesture.maxTravel, Math.hypot(dx, dy));
+        if (panGesture.maxTravel >= 5) {
+          viewport.classList.add("is-panning");
+        }
+        panX = panGesture.startPanX + dx;
+        panY = panGesture.startPanY + dy;
         applyTransform();
       });
 
-      function endPointer(e) {
-        if (!isPointerDown || e.pointerId !== activePointerId) return;
-        isPointerDown = false;
-        viewport.classList.remove("is-panning");
+      function endBoardPointer(e) {
+        if (!boardPointers.has(e.pointerId)) return;
         if (viewport.hasPointerCapture(e.pointerId)) {
           viewport.releasePointerCapture(e.pointerId);
         }
+        boardPointers.delete(e.pointerId);
+        viewport.classList.remove("is-panning");
 
-        // If user clicked a photo without dragging (< 5px), enlarge it
-        if (maxTravel < 5 && downCardIndex !== null) {
-          openLightbox(downCardIndex);
+        if (boardPointers.size >= 1) {
+          // A finger is still down after a pinch. Wait for a fresh gesture.
+          panGesture = null;
+          pinchGesture = null;
+          return;
         }
-        downCardIndex = null;
+
+        const shouldOpen = panGesture && panGesture.maxTravel < 5 && panGesture.cardIndex !== null;
+        const openIndex = shouldOpen ? panGesture.cardIndex : null;
+        panGesture = null;
+        pinchGesture = null;
+        if (openIndex !== null) openLightbox(openIndex);
       }
 
-      viewport.addEventListener("pointerup", endPointer);
-      viewport.addEventListener("pointercancel", endPointer);
+      viewport.addEventListener("pointerup", endBoardPointer);
+      viewport.addEventListener("pointercancel", endBoardPointer);
+      viewport.addEventListener("touchmove", (e) => {
+        if (e.cancelable) e.preventDefault();
+      }, { passive: false });
 
       // Corner zoom controls
       document.getElementById("zoom-in").addEventListener("click", () => {
@@ -1241,9 +1296,63 @@
       const lbImg = document.getElementById("lightbox-img");
       const lbCaption = document.getElementById("lightbox-caption");
       const lbOpenOriginal = document.getElementById("lb-open-original");
+      const lbPrint = document.querySelector(".lightbox-print");
       let currentIndex = -1;
+      let lbScale = 1;
+      let lbTx = 0;
+      let lbTy = 0;
+      const lbPointers = new Map();
+      let lbPan = null;
+      let lbPinch = null;
+      let lbSuppressClick = false;
+      let blockBackdropClose = false;
+      const LB_MAX_SCALE = 4;
+
+      function applyLightboxZoom() {
+        if (lbScale <= 1.001) {
+          lbScale = 1;
+          lbTx = 0;
+          lbTy = 0;
+          lbPrint.style.transform = "";
+          return;
+        }
+        lbPrint.style.transform = `translate(${lbTx}px, ${lbTy}px) scale(${lbScale})`;
+      }
+
+      function resetLightboxZoom() {
+        lbScale = 1;
+        lbTx = 0;
+        lbTy = 0;
+        lbPan = null;
+        lbPinch = null;
+        lbPointers.clear();
+        lbPrint.style.transform = "";
+      }
+
+      function lightboxLayout() {
+        const rect = lbPrint.getBoundingClientRect();
+        return {
+          cx: rect.left + rect.width / 2 - lbTx,
+          cy: rect.top + rect.height / 2 - lbTy,
+          w: rect.width / lbScale,
+          h: rect.height / lbScale
+        };
+      }
+
+      function clampLightboxPan(layoutW, layoutH) {
+        if (lbScale <= 1) {
+          lbTx = 0;
+          lbTy = 0;
+          return;
+        }
+        const maxX = Math.max(24, (layoutW * (lbScale - 1)) / 2 + 36);
+        const maxY = Math.max(24, (layoutH * (lbScale - 1)) / 2 + 36);
+        lbTx = Math.min(maxX, Math.max(-maxX, lbTx));
+        lbTy = Math.min(maxY, Math.max(-maxY, lbTy));
+      }
 
       function openLightbox(index) {
+        resetLightboxZoom();
         currentIndex = (index + displayedPhotos.length) % displayedPhotos.length;
         const item = displayedPhotos[currentIndex];
         lbImg.src = item.file;
@@ -1251,11 +1360,16 @@
         lbCaption.textContent = item.title;
         lbOpenOriginal.href = new URL(item.file, document.baseURI).href;
         lightbox.classList.add("open");
+        // The tap that opens the showroom is followed by a click. On a phone
+        // that click can land on the backdrop and close it immediately.
+        blockBackdropClose = true;
+        setTimeout(() => { blockBackdropClose = false; }, 450);
       }
 
       function closeLightbox() {
         lightbox.classList.remove("open");
         currentIndex = -1;
+        resetLightboxZoom();
       }
 
       function stepLightbox(delta) {
@@ -1282,8 +1396,109 @@
         e.stopPropagation();
       });
 
+      function lightboxControlTarget(target) {
+        return !!(target && target.closest && target.closest("button, a"));
+      }
+
+      lightbox.addEventListener("pointerdown", (e) => {
+        if (!lightbox.classList.contains("open")) return;
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        lbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        if (lbPointers.size >= 2) {
+          const mid = pointerMidpoint(lbPointers);
+          const layout = lightboxLayout();
+          lbPinch = {
+            startDist: Math.max(pointerDistance(lbPointers), 1),
+            startScale: lbScale,
+            lastMidX: mid.x,
+            lastMidY: mid.y,
+            layoutCx: layout.cx,
+            layoutCy: layout.cy,
+            layoutW: layout.w,
+            layoutH: layout.h
+          };
+          lbPan = null;
+          return;
+        }
+
+        if (lightboxControlTarget(e.target) || lbScale <= 1) {
+          lbPan = null;
+          return;
+        }
+        const panLayout = lightboxLayout();
+        lbPan = {
+          id: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          startTx: lbTx,
+          startTy: lbTy,
+          maxTravel: 0,
+          layoutW: panLayout.w,
+          layoutH: panLayout.h
+        };
+        lbPinch = null;
+      });
+
+      lightbox.addEventListener("pointermove", (e) => {
+        if (!lbPointers.has(e.pointerId)) return;
+        lbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        if (lbPointers.size >= 2 && lbPinch) {
+          const dist = Math.max(pointerDistance(lbPointers), 1);
+          const mid = pointerMidpoint(lbPointers);
+          const localX = (lbPinch.lastMidX - (lbPinch.layoutCx + lbTx)) / lbScale;
+          const localY = (lbPinch.lastMidY - (lbPinch.layoutCy + lbTy)) / lbScale;
+          lbScale = Math.min(LB_MAX_SCALE, Math.max(1, lbPinch.startScale * (dist / lbPinch.startDist)));
+          lbTx = mid.x - lbPinch.layoutCx - localX * lbScale;
+          lbTy = mid.y - lbPinch.layoutCy - localY * lbScale;
+          lbPinch.lastMidX = mid.x;
+          lbPinch.lastMidY = mid.y;
+          clampLightboxPan(lbPinch.layoutW, lbPinch.layoutH);
+          applyLightboxZoom();
+          return;
+        }
+
+        if (!lbPan || e.pointerId !== lbPan.id || lbScale <= 1) return;
+        lbTx = lbPan.startTx + (e.clientX - lbPan.startX);
+        lbTy = lbPan.startTy + (e.clientY - lbPan.startY);
+        lbPan.maxTravel = Math.max(lbPan.maxTravel, Math.hypot(e.clientX - lbPan.startX, e.clientY - lbPan.startY));
+        clampLightboxPan(lbPan.layoutW, lbPan.layoutH);
+        applyLightboxZoom();
+      });
+
+      function endLightboxPointer(e) {
+        if (!lbPointers.has(e.pointerId)) return;
+        lbPointers.delete(e.pointerId);
+        const moved = (lbPinch !== null) || (lbPan && lbPan.maxTravel >= 5);
+        if (moved) {
+          lbSuppressClick = true;
+          setTimeout(() => { lbSuppressClick = false; }, 400);
+        }
+        if (lbPointers.size >= 1) {
+          lbPan = null;
+          lbPinch = null;
+          return;
+        }
+        lbPan = null;
+        lbPinch = null;
+      }
+
+      lightbox.addEventListener("pointerup", endLightboxPointer);
+      lightbox.addEventListener("pointercancel", endLightboxPointer);
+      lightbox.addEventListener("touchmove", (e) => {
+        if (lightbox.classList.contains("open") && e.cancelable) e.preventDefault();
+      }, { passive: false });
+
       lightbox.addEventListener("click", (e) => {
+        if (lbSuppressClick) {
+          lbSuppressClick = false;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         if (e.target === lightbox) {
+          if (blockBackdropClose) return;
           closeLightbox();
         }
       });
