@@ -312,6 +312,16 @@
       display: none !important;
     }
 
+    #shuffleBtn,
+    #shuffle-btn {
+      display: none;
+    }
+
+    /* The organization group only held the hidden sort and shuffle controls. */
+    .board-controls:has(#shuffle-btn) {
+      display: none;
+    }
+
     /* Background swatch dots */
     .bg-swatch {
       width: 20px;
