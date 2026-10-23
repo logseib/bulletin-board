@@ -422,13 +422,59 @@
       -webkit-user-drag: none;
     }
 
-    #lightbox-caption {
+    .lightbox-frame {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      max-width: 100%;
+    }
+
+    .lightbox-meta {
       margin-top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+    }
+
+    #lightbox-caption {
+      flex: 1;
+      min-width: 0;
       color: #f2eadf;
       font-size: 14px;
       letter-spacing: 0.02em;
       font-weight: 500;
+      text-align: left;
       text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+    }
+
+    .lb-open-original {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      margin-left: auto;
+      color: #f2eadf;
+      text-decoration: none;
+      border-radius: 4px;
+    }
+
+    .lb-open-original svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.9;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+
+    .lb-open-original:hover {
+      color: #ffffff;
     }
 
     .lb-btn {
@@ -532,10 +578,21 @@
     <button type="button" class="lb-btn" id="lb-close" aria-label="Close">×</button>
     <button type="button" class="lb-btn" id="lb-prev" aria-label="Previous photo">‹</button>
     <div class="lightbox-inner">
-      <div class="lightbox-print">
-        <img id="lightbox-img" src="" alt="" draggable="false" />
+      <div class="lightbox-frame">
+        <div class="lightbox-print">
+          <img id="lightbox-img" src="" alt="" draggable="false" />
+        </div>
+        <div class="lightbox-meta">
+          <div id="lightbox-caption"></div>
+          <a id="lb-open-original" class="lb-open-original" href="" target="_blank" rel="noreferrer" aria-label="Open original image">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <line x1="10" y1="14" x2="21" y2="3"></line>
+            </svg>
+          </a>
+        </div>
       </div>
-      <div id="lightbox-caption"></div>
     </div>
     <button type="button" class="lb-btn" id="lb-next" aria-label="Next photo">›</button>
   </div>
@@ -1173,6 +1230,7 @@
       const lightbox = document.getElementById("lightbox");
       const lbImg = document.getElementById("lightbox-img");
       const lbCaption = document.getElementById("lightbox-caption");
+      const lbOpenOriginal = document.getElementById("lb-open-original");
       let currentIndex = -1;
 
       function openLightbox(index) {
@@ -1181,6 +1239,7 @@
         lbImg.src = item.file;
         lbImg.alt = item.title;
         lbCaption.textContent = item.title;
+        lbOpenOriginal.href = new URL(item.file, document.baseURI).href;
         lightbox.classList.add("open");
       }
 
@@ -1207,6 +1266,10 @@
       document.getElementById("lb-next").addEventListener("click", (e) => {
         e.stopPropagation();
         stepLightbox(1);
+      });
+
+      lbOpenOriginal.addEventListener("click", (e) => {
+        e.stopPropagation();
       });
 
       lightbox.addEventListener("click", (e) => {
